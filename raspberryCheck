@@ -1,0 +1,163 @@
+#!/bin/expect
+#
+# Create a login to the Setar company
+# Also creates a tunnel using a specified port on the target node
+#
+# argv0 = solution
+# argv1 = Node ID (target node)
+# argv2 = Port (used for forwarding) 
+# argv3 = targetPort -- usually port 22 or can be a different port for application use IE 80 for a web browser
+#                       access would then be http://localhost:port/
+#
+# Access is then also possible by ssh/scp etc using scp root@localhost:port/dir/file
+#
+#match_max 60000
+set version                "Setar Connect V1.3"
+set timeout                15
+set AcisionUsername        "intinfra+hallpe"
+#set AcisionStepNode       "us-dal-sup03"
+set AcisionStepNode        "cz-nag-sup03"
+set setarStepNodeCharging  "172.28.130.128"
+set setarStepNodeMessaging "172.28.130.154" 
+set setarStepNodeTestBed   "172.28.130.128"
+set setarNodesTestBed      "acet fsc3"
+set setarIPsTestBed        "172.16.5.31 172.16.5.33"
+set setarNodesCharging     "fsc1 fsc2 ace1a ace1b"
+set setarIPsCharging       "172.28.130.135 172.28.130.136 172.28.130.137 172.28.130.138"
+set setarNodesMessaging    "mco1 mco2 aag1 aag2 mmsc1 mmsc2 sim"
+set setarIPsMessaging      "172.16.250.11 172.16.250.12 172.16.250.13 172.16.250.14 172.16.250.16 172.16.250.17 172.16.250.19"
+set setarNodesDisc         "disc1 disc2 telepath"
+set setarIPsDisc           "172.16.5.14 172.16.5.15 172.16.4.130"
+set targetPort             22
+set preferredEditor        "nano"
+set port 7000
+#
+log_user 1
+#
+proc Usage {} {
+    global setarNodesTestBed
+    global setarNodesCharging
+    global setarNodesMessaging
+    global setarNodesDisc
+    global targetPort
+    puts "usage: m|c|t|d nodename \[port\] \[targetPort\]"
+    puts "       Charging nodes   $setarNodesCharging"
+    puts "       Messaging nodes  $setarNodesMessaging"
+    puts "       TestBed nodes    $setarNodesTestBed"
+    puts "       Disc Nodes       $setarNodesDisc"
+    exit
+}
+set solution   [ lindex $argv 0 ]
+set nodeID     [ lindex $argv 1 ]
+set port       [ lindex $argv 2 ]
+set targetPort [ lindex $argv 3 ]
+if { "" == $targetPort } {
+  set targetPort 22
+}
+if { "" == $port } {
+  set port 8010
+}
+if {![info exist solution] || ![info exist nodeID] } {
+    Usage
+}
+if { $solution eq "m" } {
+  set stepNode     $setarStepNodeMessaging
+  set targetNode   [ lindex $setarIPsMessaging [ lsearch $setarNodesMessaging $nodeID ] ]
+  set password "Lcmanager"
+} elseif { $solution eq "c" } {
+    set stepNode   $setarStepNodeCharging
+    set targetNode [ lindex $setarIPsCharging [ lsearch $setarNodesCharging $nodeID ] ]
+    if { [string compare -length 3 $targetNode "fsc"] } { 
+	set password "hwroot"
+    } else {
+	set password "heledd"
+    }
+} elseif { $solution eq "t" } {
+    set stepNode $setarStepNodeTestBed
+    set targetNode [ lindex $setarIPsTestBed [ lsearch $setarNodesTestBed $nodeID ] ]
+    if { [string compare -length 3 $targetNode "fsc"] } { 
+	set password "hwroot"
+        set username "root"
+    } else {
+        set username "aethos"
+    }
+} elseif { $solution eq "d" } {
+    set stepNode  $setarStepNodeCharging
+    set targetNode   [ lindex $setarIPsDisc [ lsearch $setarNodesDisc $nodeID ] ]
+    set password "Lcmanager"
+} else {
+    puts "Invalid solution $solution"
+    Usage
+}    
+if { $targetNode eq "" || $solution eq "" } {
+    Usage
+}
+#
+# Start the login process
+#
+log_user 1
+puts "$version"
+puts "Connecting to target node $nodeID:$port via $stepNode target port $targetPort"
+#
+spawn ssh -Ct -L$port:localhost:$port $AcisionUsername\@$AcisionStepNode
+expect {
+    timeout { send_user "\nerror: timed out connecting to the Acision stepping stone!"; exit}
+    "~]$ "
+}
+if { $solution eq "m" } {
+    send "ssh -Ct -L$port:localhost:$port root\@$stepNode\r"
+    expect {
+        timeout      { send_user "\nerror: timed out logging in to stepping node $stepNode !\n"; exit }
+        "password: " { send "$password\r" }
+    }
+    expect {
+	"# " { send "ssh -Ct -L$port:localhost:$targetPort root\@$targetNode\r" }
+    }
+    expect {
+	"password: " { send "$password\r" }
+    }
+    expect {
+        "# " { send "export EDITOR=$preferredEditor\r" }
+    }
+}
+if { $solution eq "c" } {
+    send "ssh -Ct -L$port:localhost:22 root\@$targetNode\r"
+    expect {	
+      timeout      { send_user "\nerror: timed out logging in to $nodeID !\n"; exit }
+      "password: " { send "$password\r" }
+    }
+}
+if { $solution eq "d" } {
+    send "ssh -Ct -L$port:localhost:$port root\@$stepNode\r"
+    expect {
+        timeout      { send_user "\nerror: timed out logging in to stepping node $stepNode !\n"; exit }
+        "password: " { send "$password\r" }
+    }
+    expect {
+	"# " { send "ssh -Ct -L$port:localhost:$targetPort root\@$targetNode\r" }
+    }
+    expect {
+	"password: " { send "$password\r" }
+    }
+    expect {
+        "# " { send "export EDITOR=$preferredEditor\r" }
+    }
+    expect {
+        "# " { send "cd /home/disc\r" }
+   }
+}
+if { $solution eq "t" } {
+    send "ssh -Ct -L$port:localhost:$port $username\@$stepNode\r"
+    expect {	
+      timeout      { send_user "\nerror: timed out logging in to $nodeID !\n"; exit }
+      "password: " { send "Lcmanager\r" }
+    }
+    expect {
+	"# "       { send "ssh -Ct -L$port:localhost:$targetPort $username\@$targetNode\r" }
+    }
+    expect {
+	"password: " { send "$password\r" }
+	"# "
+    }
+}
+interact
