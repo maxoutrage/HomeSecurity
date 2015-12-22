@@ -22,7 +22,7 @@ set dirList "/home/phall/gdrive/motion/DriveWay /home/phall/gdrive/motion/FrontD
 set now [clock seconds] 
 set version "motionFiles V0.1" 
 set pixelLimit 5000 
-set noiseLimit 20
+set noiseLimit 14
 #
 # Retrieve a list of files from the DB based on pixels and noise limits
 #
@@ -53,14 +53,20 @@ proc GetFiles { dir } {
 #
 # Delete files from a directory
 # 
-proc removeFiles { dir } {
+proc removeFiles { dir olderThan} {
   set log [logger::init ::motionFiles::removeFiles]
+  set olderThanT [ clock format $olderThan -format {%Y/%m/%d %H:%M}]
   if { [catch {cd $dir } ] } {
     ${log}::critical "Can't cd to $dir"
     return
   }
   ${log}::info "Removing files from $dir"
-  exec rm -f *.avi
+  set fileList [ GetFiles $dir ]
+  foreach file $fileList {
+    if { [file mtime $file] > $olderThan} {
+      exec rm -f $file
+    }
+  }
   return
 }
 #
@@ -68,14 +74,16 @@ proc removeFiles { dir } {
 #
 set log [logger::init motionFiles] 
 ${log}::info "Event Begins" 
+set targetTime [ clock add $now -7 days ] 
+${log}::info "Cutoff time is [clock format $targetTime -format {%Y/%m/%d %H:%M}]" 
 set now [clock seconds] 
 set nowT [clock format $now -format {%Y/%m/%d %H:%M}]
 #
 # Remove all the current files
 # 
-${log}::info "Removing current files" 
+${log}::info "Removing current files older than [clock format $targetTime -format {%Y/%m/%d %H:%M}]"
 foreach dir $dirList {
-  removeFiles $dir
+  removeFiles $dir $targetTime
 }
 #
 # Move into the base directory for gdrive
@@ -85,8 +93,6 @@ if { [catch {cd $baseDir}] } {
   ${log}::critical "Failed to change to base directory $baseDir"
   exit
 }
-set targetTime [ clock add $now -7 days ] 
-${log}::info "Cutoff time is [clock format $targetTime -format {%Y/%m/%d %H:%M}]" 
 set count 0 
 foreach dir $dirList camera $cameras {
   cd $dir
@@ -108,7 +114,7 @@ foreach dir $dirList camera $cameras {
   set count 0
 }
 ${log}::info "Sync'ing local files with Google Drive"
-if { [catch { exec /home/phall/Hacks/motion.tcl } ] } {
+if { [catch { exec /home/phall/Hacks/motionMove.tcl } ] } {
   ${log}::critical "Problems sync'ing local files with Google Drive"
 }
 ${log}::info "Event Ends" 
