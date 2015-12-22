@@ -3,6 +3,9 @@
 # Check there is a network connection to the local router
 # If the connection appears down then restart the network
 #
+# 11/5/15	Added check for motion port 8080
+#               restart motion if not found
+#
 # Local Network Router
 router_ip=10.0.0.1
 log_file=/home/pi/mystery.log
@@ -33,3 +36,12 @@ else print2log "Ping OK."
 fi
 # Check sshd.
 print2log "sshd PIDs: "$(ps -o pid= -C sshd)
+#
+# Check motion is listening on 8080
+#
+motion_listening=`sudo netstat -anp | grep 8081`
+if [ $? != 0 ]; then
+  print2log "motion is not listening on port 8080! Attempting to restart motion..."
+  sudo /etc/init.d/motion restart
+fi
+

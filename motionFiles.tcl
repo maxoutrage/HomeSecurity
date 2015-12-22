@@ -1,54 +1,115 @@
 #!/bin/tclsh
 #
-package require mysqltcl
-
+package require mysqltcl 
+package require logger
+package require Expect
+#
+# logger
+#
+proc log_to_file {txt} {
+    set logfile "/home/phall/log/motionFiles.log"
+    set msg "\[[clock format [clock seconds]]\] $txt"
+    set f [open $logfile {WRONLY CREAT APPEND}]
+    fconfigure $f -encoding utf-8
+    set msg [string map { "-_logger::service" "" } $msg]
+    puts $f $msg
+    close $f
+}
+#
+set cameras "2 1 4 3" 
 set baseDir "/home/phall/gdrive/motion" 
-set m [mysqlconnect -user root -db security -password hyperion] 
-mysqluse $m mysql
-
+set dirList "/home/phall/gdrive/motion/DriveWay /home/phall/gdrive/motion/FrontDoorIN /home/phall/gdrive/motion/FrontDoorOUT /home/phall/gdrive/motion/Garage" 
+set now [clock seconds] 
+set version "motionFiles V0.1" 
+set pixelLimit 5000 
+set noiseLimit 20
+#
+# Retrieve a list of files from the DB based on pixels and noise limits
+#
+proc GetFilesFromDB { camera pixelLimit noiseLimit } {
+   set log [logger::init ::motionFiles::GetFilesFromDB]
+   set m [mysqlconnect -user root -db security -password hyperion]
+   set mysqlQuery "select filename from motionSecurity where camera = $camera and changed_pixels > $pixelLimit and noise < 
+$noiseLimit"
+   set fileList [mysqlsel $m $mysqlQuery -flatlist]
+   ${log}::info "Number of files for camera $camera [llength $fileList]."
+   mysqlclose $m
+   return $fileList
+}
+#
+# Return a list of files from a directory - only avi files are supported
+#
+proc GetFiles { dir } {
+  set log [logger::init ::motionFIles::GetFiles]
+  ${log}::info "Retrieving files from $dir"
+  if { [catch { cd $dir } ] } {
+    ${log}::critical "Can't cd to $dir"
+    set fileList ""
+    return $fileList
+  }
+  set fileList [ glob -directory $dir *.avi ]
+  return $fileList
+}
+#
+# Delete files from a directory
+# 
+proc removeFiles { dir } {
+  set log [logger::init ::motionFiles::removeFiles]
+  if { [catch {cd $dir } ] } {
+    ${log}::critical "Can't cd to $dir"
+    return
+  }
+  ${log}::info "Removing files from $dir"
+  exec rm -f *.avi
+  return
+}
+#
+# Main Loop
+#
+set log [logger::init motionFiles] 
+${log}::info "Event Begins" 
+set now [clock seconds] 
+set nowT [clock format $now -format {%Y/%m/%d %H:%M}]
+#
+# Remove all the current files
+# 
+${log}::info "Removing current files" 
+foreach dir $dirList {
+  removeFiles $dir
+}
+#
+# Move into the base directory for gdrive
+#
+${log}::info "Moving to $baseDir" 
 if { [catch {cd $baseDir}] } {
-  puts "Failed to set base directory $baseDir"
+  ${log}::critical "Failed to change to base directory $baseDir"
   exit
 }
-
-puts -nonewline "Retriving current list of files..." 
-if { [catch { set originalFileList [ exec ls {*}[glob *.avi] ] } ] } {
-  puts "No files matched in drive directory!"
-  set originalFileList ""
-}
+set targetTime [ clock add $now -7 days ] 
+${log}::info "Cutoff time is [clock format $targetTime -format {%Y/%m/%d %H:%M}]" 
 set count 0 
-foreach res $originalFileList {
-  incr count
-}
-puts "Done. Number of files currently in the gdrive directory is $count."
-
-puts -nonewline "Date ? " 
-flush stdout 
-set targetDate [gets stdin]
-set newFileList "" 
-set count 0
-set mysqlQuery "select filename from security.motionSecurity where time_stamp > '$targetDate'"
-
-puts -nonewline "Comparing DB entries to files in gdrive directory..." 
-foreach res [mysqlsel $m $mysqlQuery -flatlist] {
-    set fn [file tail $res]
-    if { [lsearch originalFileList $fn] < 0 } {
-      lappend newFileList $res
-      incr count
+foreach dir $dirList camera $cameras {
+  cd $dir
+  set files [ GetFilesFromDB $camera $pixelLimit $noiseLimit ]
+  ${log}::info "Camera $camera file count is [llength $files]"
+  foreach file $files {
+    if { [file isfile $file] } {
+      set ftime [file mtime $file]
+      if { [expr {$ftime > $targetTime}] } {
+        set fn [file tail $file]
+        if { [catch { exec ln -s $file $fn } msg] } {
+          incr countError
+        }
+        incr count
+      }
     }
+  }
+  ${log}::info "Camera $camera files matching time constraints is $count"
+  set count 0
 }
-mysqlclose $m 
-puts -nonewline "Done." 
-puts " Difference in files is $count." 
-puts -nonewline "Linking files in gdrive to pi directories..."
-set countLinked 0 
-set countError 0 
-foreach newFile $newFileList {
-    incr countLinked
-    set fn [file tail $newFile]
-    if { [catch { exec ln -s $newFile $fn } msg] } {
-      incr countError
-    }
+${log}::info "Sync'ing local files with Google Drive"
+if { [catch { exec /home/phall/Hacks/motion.tcl } ] } {
+  ${log}::critical "Problems sync'ing local files with Google Drive"
 }
-puts "Done. Linked $countLinked files. Number of files failed to link because of an error $countError"
-
+${log}::info "Event Ends" 
+exit
