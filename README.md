@@ -8,4 +8,5 @@
 # raspberrypi camera video is pushed to google drive using 'drive'
 # raspberries are checked to be running and online and motion is running
 #
+# mariaDB is used for recording weather and light status
 #
