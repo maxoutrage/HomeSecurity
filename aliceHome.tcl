@@ -13,8 +13,8 @@ set delay         "01:30:00"
 set delayT        "-60 minutes"
 set upStairsON    "20:00:00"
 set upStairsOFF   "02:00:00"
-set downStairsOFF "02:00:00"
-set deckON        "02:00:00"
+set downStairsOFF "02:30:00"
+set deckON        "00:30:00"
 set deckOFF       "06:00:00"
 set noDecisions   "21:00:00"
 set yesDecisions  "12:00:00"
@@ -22,8 +22,11 @@ set livingRoom    3
 set diningRoom    2
 set masterBedRoom 4
 set deckLight     5
+set ON            1
+set OFF           0
+set manualON      2
 #
-# logger
+# logger events to fixed file
 #
 proc log_to_file {txt} {
     set logfile "/home/phall/log/aliceHome.log"
@@ -115,13 +118,13 @@ proc getWeather {} {
   return [ list $cloudStatus $cloudCover $cloudiness $sunStatus $sunSets $currentTemp $humidity $pressure $windSpeed $windName $windDirect $rainMode $sunRise]
 }
 #
-# Sleep routine - this may help the br status 
+# Sleep routine - this may help the br status by inserting a delay between events 
 #
 proc sleep N {
     after [expr {int($N * 1000)}]
 }
 #
-# Control appliance on/off
+# Control appliance on/off using br connected to a USB device - br is setup using the private config
 # 
 proc bottleRocket { house appliance state } {
   set log [logger::init ::aliceHome::bottleRocket]
@@ -173,6 +176,8 @@ proc upStairsStatus { lightsON upStairsOff weatherStatus cloudCover } {
   set normalOff [ clock add $normalOff 24 hours ]
   set normalON  [ clock scan $lightsON    -format {%H:%M:%S} ]
   #
+  # patterns decide if the lights should be on or off - default is that lights are off
+  #
   if { [expr $now > $normalOff] } {
     set switchON {false}
     return $switchON
@@ -183,6 +188,9 @@ proc upStairsStatus { lightsON upStairsOff weatherStatus cloudCover } {
   }
   return $switchON
 }
+#
+# Adjust the lightsON based on the weather information the latest/default lightsON will be (sunSets - delayT)
+#
 proc downStairsStatus { lightsON downStairsOff weatherStatus cloudCover } {
   set log [logger::init ::aliceHome::downStairsStatus]
   set now          [ clock seconds ]
@@ -227,7 +235,11 @@ proc weatherDecision { lightsON weatherStatus cloudCover } {
   set now [ clock seconds ]
   set weatherON {false}
   #
-  if { [expr $cloudCover > 90] && [string compare $weatherStatus "overcast clouds"] } {
+  if { [expr $cloudCover > 88] && [string compare $weatherStatus "overcast clouds"] } {
+    set weatherON {true}
+    return $weatherON
+  }
+  if { [expr $cloudCover > 90] && [string compare $weatherStatus "broken clouds"] } {
     set weatherON {true}
     return $weatherON
   }
@@ -301,6 +313,7 @@ set noDecisionsSec  [ clock scan $noDecisions  -format {%H:%M:%S} ]
 set yesDecisionsSec [ clock scan $yesDecisions -format {%H:%M:%S} ] 
 set now [clock seconds]
 set nowT [clock format $now -format %H:%M]
+#
 ${log}::info "Event Begins"
 ${log}::info "Local sunset time is $sunSets, local sunrise time is $sunRise"
 set lightsON [ calculateSunSet $sunSets $delayT ]
@@ -321,8 +334,7 @@ set c [ clock format $c        -format "%Y-%m-%d %H:%M:%S" ]
 # and the lights will be switched off manually. If that decision fails then there is a cron job 
 # to switch off everything. The only exception is the outside deck light.
 # 
-#set lightStatus [ deckLightStatus $deckON $deckOFF $deckStatus ]
-#if 
+#set lightStatus [ deckLightStatus $deckON $deckOFF $deckStatus ] 
 #
 # Are decisions made ?
 #
@@ -344,19 +356,23 @@ ${log}::info "WEATHER:: Current temperature/humidity/pressure is $currentTemp/$h
 set lightStatus [ upStairsStatus $upStairsON $upStairsOFF $cloudCover $cloudiness ]
 if { [string is true -strict $lightStatus] } {
   ${log}::info "DECISION:: up stairs light ON"
-  if { [retrieveLightStatus $masterBedRoom] == 0 } {
+  if { [retrieveLightStatus $masterBedRoom] == $OFF } {
    ${log}::info "Implementing change in status"
     bottleRocket A $masterBedRoom on
-    set sqlcmd "insert into HomeLights (light,lightstatus,time_stamp) values (4,1,'$a')"
+    set sqlcmd "insert into HomeLights (light,lightstatus,time_stamp) values ($masterBedRoom,$ON,'$a')"
     set dbStatus [dbCmd $sqlcmd]
   }
 } else {
   ${log}::info "DECISION:: up stairs lights OFF"
-  if { [retrieveLightStatus $masterBedRoom] == 1 } {
-    ${log}::info "Implementing change in status"
-    bottleRocket A $masterBedRoom off
-    set sqlcmd "insert into HomeLights (light,lightstatus,time_stamp) values (4,0,'$a')"
-    set dbStatus [dbCmd $sqlcmd]
+  if { $manualON == [retrieveLightStatus $masterBedRoom] } {
+    ${log}::info "light is manually enabled"
+  } else {
+    if { [retrieveLightStatus $masterBedRoom] == $ON } {
+      ${log}::info "Implementing change in status"
+      bottleRocket A $masterBedRoom off
+      set sqlcmd "insert into HomeLights (light,lightstatus,time_stamp) values ($masterBedRoom,$OFF,'$a')"
+      set dbStatus [dbCmd $sqlcmd]
+    }
   }
 }
 #
@@ -366,32 +382,36 @@ set lightStatus [ downStairsStatus $lightsON $downStairsOFF $cloudCover $cloudin
 if { [string is true -strict $lightStatus] } {
   ${log}::info "DECISION:: down stairs lights ON"
   set lightONOFF [ retrieveLightStatus $diningRoom ]
-  if { 0 == $lightONOFF } {
+  if { $OFF == $lightONOFF } {
     ${log}::info "Implementing change in status"
     bottleRocket A $diningRoom on
-    set sqlcmd "insert into HomeLights (light,lightstatus,time_stamp) values (2,1,'$a')"
+    set sqlcmd "insert into HomeLights (light,lightstatus,time_stamp) values ($diningRoom,$ON,'$a')"
     set dbStatus [dbCmd $sqlcmd]
   }
   set lightONOFF [ retrieveLightStatus $livingRoom ]
-  if { 0 == $lightONOFF } {
+  if { $OFF == $lightONOFF } {
     ${log}::info "Implementing change in status"
     bottleRocket A $livingRoom on
-    set sqlcmd "insert into HomeLights (light,lightstatus,time_stamp) values (3,1,'$a')"
+    set sqlcmd "insert into HomeLights (light,lightstatus,time_stamp) values ($livingRoom,$ON,'$a')"
     set dbStatus [dbCmd $sqlcmd]
   }
 } else {
   ${log}::info "DECISION:: down stairs lights OFF"
-  if { [retrieveLightStatus $diningRoom] == 1 } {
-    ${log}::info "Implementing change in status"
-    bottleRocket A $diningRoom off
-    set sqlcmd "insert into HomeLights (light,lightstatus,time_stamp) values (2,0,'$a')"
-    set dbStatus [dbCmd $sqlcmd]
-  }
-  if { [retrieveLightStatus $livingRoom] == 1 } {
-    ${log}::info "Implementing change in status"
-    bottleRocket A $livingRoom off
-    set sqlcmd "insert into HomeLights (light,lightstatus,time_stamp) values (3,0,'$a')"
-    set dbStatus [dbCmd $sqlcmd]
+  if { $manualON == [ retrieveLightStatus $diningRoom ] } {
+    ${log}::info "Light $diningRoot has been manually enabled"
+  } else {
+    if { $ON == [ retrieveLightStatus $diningRoom ] } {
+      ${log}::info "Implementing change in status"
+      bottleRocket A $diningRoom off
+      set sqlcmd "insert into HomeLights (light,lightstatus,time_stamp) values ($diningRoom,$OFF,'$a')"
+      set dbStatus [dbCmd $sqlcmd]
+    }
+    if { $ON == [retrieveLightStatus $livingRoom] } {
+      ${log}::info "Implementing change in status"
+      bottleRocket A $livingRoom off
+      set sqlcmd "insert into HomeLights (light,lightstatus,time_stamp) values ($livingRoom,$OFF,'$a')"
+      set dbStatus [dbCmd $sqlcmd]
+    }
   }
 }
 #

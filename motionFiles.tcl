@@ -1,5 +1,7 @@
 #!/bin/tclsh
 #
+# P.A.Hall	8th January 2016	removeFiles - Catch if the file does not exist but is in the DB and report
+#
 package require mysqltcl 
 package require logger
 package require Expect
@@ -21,16 +23,15 @@ set baseDir "/home/phall/gdrive/motion"
 set dirList "/home/phall/gdrive/motion/DriveWay /home/phall/gdrive/motion/FrontDoorIN /home/phall/gdrive/motion/FrontDoorOUT /home/phall/gdrive/motion/Garage" 
 set now [clock seconds] 
 set version "motionFiles V0.1" 
-set pixelLimit 5000 
-set noiseLimit 14
+set pixelLimit 5000
+set noiseLimit 15
 #
 # Retrieve a list of files from the DB based on pixels and noise limits
 #
 proc GetFilesFromDB { camera pixelLimit noiseLimit } {
    set log [logger::init ::motionFiles::GetFilesFromDB]
    set m [mysqlconnect -user root -db security -password hyperion]
-   set mysqlQuery "select filename from motionSecurity where camera = $camera and changed_pixels > $pixelLimit and noise < 
-$noiseLimit"
+   set mysqlQuery "select filename from motionSecurity where camera = $camera and changed_pixels > $pixelLimit and noise < $noiseLimit"
    set fileList [mysqlsel $m $mysqlQuery -flatlist]
    ${log}::info "Number of files for camera $camera [llength $fileList]."
    mysqlclose $m
@@ -56,17 +57,22 @@ proc GetFiles { dir } {
 proc removeFiles { dir olderThan} {
   set log [logger::init ::motionFiles::removeFiles]
   set olderThanT [ clock format $olderThan -format {%Y/%m/%d %H:%M}]
+  set count 0
   if { [catch {cd $dir } ] } {
-    ${log}::critical "Can't cd to $dir"
+    ${log}::critical "Failed to changed to $dir"
     return
   }
   ${log}::info "Removing files from $dir"
   set fileList [ GetFiles $dir ]
   foreach file $fileList {
-    if { [file mtime $file] > $olderThan} {
-      exec rm -f $file
-    }
+    if { [file isfile $file] } {
+      if { [file mtime $file] > $olderThan} {
+        exec rm -f $file
+        incr count
+      }
+    } else { ${log}::error "File $file exists in the DB but not in the directory" }
   }
+  ${log}::info "Removed $count files"
   return
 }
 #
@@ -79,9 +85,9 @@ ${log}::info "Cutoff time is [clock format $targetTime -format {%Y/%m/%d %H:%M}]
 set now [clock seconds] 
 set nowT [clock format $now -format {%Y/%m/%d %H:%M}]
 #
-# Remove all the current files
+# Remove all the current files older than specific date
 # 
-${log}::info "Removing current files older than [clock format $targetTime -format {%Y/%m/%d %H:%M}]"
+${log}::info "Removing from motion directories files older than [clock format $targetTime -format {%Y/%m/%d %H:%M}]"
 foreach dir $dirList {
   removeFiles $dir $targetTime
 }
@@ -93,11 +99,11 @@ if { [catch {cd $baseDir}] } {
   ${log}::critical "Failed to change to base directory $baseDir"
   exit
 }
-set count 0 
+set count 0
 foreach dir $dirList camera $cameras {
   cd $dir
   set files [ GetFilesFromDB $camera $pixelLimit $noiseLimit ]
-  ${log}::info "Camera $camera file count is [llength $files]"
+  ${log}::info "Camera $camera - number of files is [llength $files]"
   foreach file $files {
     if { [file isfile $file] } {
       set ftime [file mtime $file]
@@ -110,12 +116,9 @@ foreach dir $dirList camera $cameras {
       }
     }
   }
-  ${log}::info "Camera $camera files matching time constraints is $count"
+  ${log}::info "For camera $camera - number of files matching time constraints is $count"
   set count 0
 }
-${log}::info "Sync'ing local files with Google Drive"
-if { [catch { exec /home/phall/Hacks/motionMove.tcl } ] } {
-  ${log}::critical "Problems sync'ing local files with Google Drive"
-}
-${log}::info "Event Ends" 
+${log}::info "Local files ready for push to Google Drive"
+${log}::info "Event Ends"
 exit
